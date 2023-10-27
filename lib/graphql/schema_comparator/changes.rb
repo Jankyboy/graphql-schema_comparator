@@ -51,11 +51,11 @@ module GraphQL
         end
 
         def message
-          "Type `#{removed_type.graphql_definition}` was removed"
+          "Type `#{removed_type.graphql_name}` was removed"
         end
 
         def path
-          removed_type.graphql_definition.to_s
+          removed_type.path
         end
       end
 
@@ -88,31 +88,37 @@ module GraphQL
         end
 
         def message
-          "`#{old_type.graphql_definition}` kind changed from `#{old_type.kind}` to `#{new_type.kind}`"
+          "`#{old_type.graphql_name}` kind changed from `#{old_type.kind}` to `#{new_type.kind}`"
         end
 
         def path
-          old_type.graphql_definition.to_s
+          old_type.path
         end
       end
 
       class EnumValueRemoved < AbstractChange
         attr_reader :enum_value, :enum_type, :criticality
 
-        def initialize(enum_type, enum_value)
+        def initialize(enum_type, enum_value, usage)
           @enum_value = enum_value
           @enum_type = enum_type
-          @criticality = Changes::Criticality.breaking(
-            reason: "Removing an enum value will cause existing queries that use this enum value to error."
-          )
+          @criticality = if usage.input?
+                           Changes::Criticality.breaking(
+                             reason: "Removing an enum value will cause existing queries that use this enum value to error."
+                           )
+                         else
+                           Changes::Criticality.non_breaking(
+                             reason: "Removing an enum value for enums used only in outputs is non-breaking."
+                           )
+                         end
         end
 
         def message
-          "Enum value `#{enum_value.graphql_name}` was removed from enum `#{enum_type.graphql_definition}`"
+          "Enum value `#{enum_value.graphql_name}` was removed from enum `#{enum_type.graphql_name}`"
         end
 
         def path
-          [enum_type.graphql_definition, enum_value.graphql_name].join('.')
+          enum_value.path
         end
       end
 
@@ -128,11 +134,11 @@ module GraphQL
         end
 
         def message
-          "Union member `#{union_member.graphql_name}` was removed from Union type `#{union_type.graphql_definition}`"
+          "Union member `#{union_member.graphql_name}` was removed from Union type `#{union_type.graphql_name}`"
         end
 
         def path
-          union_type.graphql_definition.to_s
+          union_type.path
         end
       end
 
@@ -148,11 +154,11 @@ module GraphQL
         end
 
         def message
-          "Input field `#{field.graphql_name}` was removed from input object type `#{input_object_type.graphql_definition}`"
+          "Input field `#{field.graphql_name}` was removed from input object type `#{input_object_type.graphql_name}`"
         end
 
         def path
-          [input_object_type.graphql_definition, field.graphql_name].join('.')
+          field.path
         end
       end
 
@@ -169,11 +175,11 @@ module GraphQL
         end
 
         def message
-          "Argument `#{argument.graphql_name}: #{argument.type.graphql_definition}` was removed from field `#{object_type.graphql_definition}.#{field.graphql_name}`"
+          "Argument `#{argument.graphql_name}: #{argument.type.to_type_signature}` was removed from field `#{object_type.graphql_name}.#{field.graphql_name}`"
         end
 
         def path
-          [object_type.graphql_definition, field.graphql_name, argument.graphql_name].join('.')
+          argument.path
         end
       end
 
@@ -195,21 +201,93 @@ module GraphQL
         end
       end
 
-      class SchemaQueryTypeChanged < AbstractChange
-        attr_reader :old_schema, :new_schema, :criticality
+      class RootOperationTypeAdded < AbstractChange
+        attr_reader :new_schema, :operation_type, :criticality
 
-        def initialize(old_schema, new_schema)
+        def initialize(new_schema:, operation_type:)
+          @new_schema = new_schema
+          @operation_type = operation_type
+          @criticality = Changes::Criticality.non_breaking(
+            reason: "Adding a schema #{operation_type} root is considered non-breaking."
+          )
+        end
+
+        def message
+          "Schema #{operation_type} root `#{operation_type_name}` was added"
+        end
+
+        def path
+          operation_type_name
+        end
+
+        def operation_type_name
+          case operation_type
+            when :query
+              new_schema.query.graphql_name
+            when :mutation
+              new_schema.mutation.graphql_name
+            when :subscription
+              new_schema.subscription.graphql_name
+          end
+        end
+      end
+
+      class RootOperationTypeChanged < AbstractChange
+        attr_reader :old_schema, :new_schema, :operation_type, :criticality
+
+        def initialize(old_schema:, new_schema:, operation_type:)
           @old_schema = old_schema
           @new_schema = new_schema
+          @operation_type = operation_type
           @criticality = Changes::Criticality.breaking
         end
 
         def message
-          "Schema query root has changed from `#{old_schema.query.graphql_name}` to `#{new_schema.query.graphql_name}`"
+          "Schema #{operation_type} root has changed from `#{operation_type_name(old_schema)}` to `#{operation_type_name(new_schema)}`"
         end
 
         def path
-          # TODO
+          operation_type_name(old_schema)
+        end
+
+        def operation_type_name(schema)
+          case operation_type
+            when :query
+              schema.query.graphql_name
+            when :mutation
+              schema.mutation.graphql_name
+            when :subscription
+              schema.subscription.graphql_name
+          end
+        end
+      end
+
+      class RootOperationTypeRemoved < AbstractChange
+        attr_reader :old_schema, :operation_type, :criticality
+
+        def initialize(old_schema:, operation_type:)
+          @old_schema = old_schema
+          @operation_type = operation_type
+          @criticality = Changes::Criticality.breaking
+        end
+
+        def message
+          "Schema #{operation_type} root `#{operation_type_name}` was removed"
+        end
+
+        def path
+          operation_type_name
+        end
+
+        def operation_type_name
+          case operation_type
+            when :query
+              old_schema.query.graphql_name
+            when :mutation
+              old_schema.mutation.graphql_name
+            when :subscription
+              old_schema.subscription.graphql_name
+          end
         end
       end
 
@@ -233,11 +311,11 @@ module GraphQL
         end
 
         def message
-          "Field `#{field.graphql_name}` was removed from object type `#{object_type.graphql_definition}`"
+          "Field `#{field.graphql_name}` was removed from object type `#{object_type.graphql_name}`"
         end
 
         def path
-          [object_type.graphql_definition, field.graphql_name].join('.')
+          [object_type.graphql_name, field.graphql_name].join(".")
         end
       end
 
@@ -271,11 +349,11 @@ module GraphQL
         end
 
         def message
-          "`#{object_type.graphql_definition}` object type no longer implements `#{interface.graphql_name}` interface"
+          "`#{object_type.graphql_name}` object type no longer implements `#{interface.graphql_name}` interface"
         end
 
         def path
-          object_type.graphql_definition.to_s
+          object_type.path
         end
       end
 
@@ -291,7 +369,7 @@ module GraphQL
         end
 
         def message
-          "Field `#{type.graphql_definition}.#{old_field.graphql_name}` changed type from `#{old_field.type.graphql_definition}` to `#{new_field.type.graphql_definition}`"
+          "Field `#{old_field.path}` changed type from `#{old_field.type.to_type_signature}` to `#{new_field.type.to_type_signature}`"
         end
 
         def criticality
@@ -303,7 +381,7 @@ module GraphQL
         end
 
         def path
-          [type.graphql_definition, old_field.graphql_name].join('.')
+          old_field.path
         end
       end
 
@@ -329,11 +407,11 @@ module GraphQL
         end
 
         def message
-          "Input field `#{input_type.graphql_definition}.#{old_input_field.graphql_name}` changed type from `#{old_input_field.type.graphql_definition}` to `#{new_input_field.type.graphql_definition}`"
+          "Input field `#{path}` changed type from `#{old_input_field.type.to_type_signature}` to `#{new_input_field.type.to_type_signature}`"
         end
 
         def path
-          [input_type.graphql_definition, old_input_field.graphql_name].join('.')
+          old_input_field.path
         end
       end
 
@@ -360,12 +438,12 @@ module GraphQL
         end
 
         def message
-          "Type for argument `#{new_argument.graphql_name}` on field `#{type.graphql_definition}.#{field.graphql_definition.name}` changed"\
-            " from `#{old_argument.type.graphql_definition}` to `#{new_argument.type.graphql_definition}`"
+          "Type for argument `#{new_argument.graphql_name}` on field `#{field.path}` changed"\
+            " from `#{old_argument.type.to_type_signature}` to `#{new_argument.type.to_type_signature}`"
         end
 
         def path
-          [type.graphql_definition, field.graphql_definition.name, old_argument.graphql_name].join('.')
+          old_argument.path
         end
       end
 
@@ -390,47 +468,11 @@ module GraphQL
 
         def message
           "Type for argument `#{new_argument.graphql_name}` on directive `#{directive.graphql_name}` changed"\
-            " from `#{old_argument.type.graphql_definition}` to `#{new_argument.type.graphql_definition}`"
+            " from `#{old_argument.type.to_type_signature}` to `#{new_argument.type.to_type_signature}`"
         end
 
         def path
           ["@#{directive.graphql_name}", old_argument.graphql_name].join('.')
-        end
-      end
-
-      class SchemaMutationTypeChanged < AbstractChange
-        attr_reader :old_schema, :new_schema, :criticality
-
-        def initialize(old_schema, new_schema)
-          @old_schema = old_schema
-          @new_schema = new_schema
-          @criticality = Changes::Criticality.breaking
-        end
-
-        def message
-          "Schema mutation root has changed from `#{old_schema.mutation}` to `#{new_schema.mutation}`"
-        end
-
-        def path
-          # TODO
-        end
-      end
-
-      class SchemaSubscriptionTypeChanged < AbstractChange
-        attr_reader :old_schema, :new_schema, :criticality
-
-        def initialize(old_schema, new_schema)
-          @old_schema = old_schema
-          @new_schema = new_schema
-          @criticality = Changes::Criticality.breaking
-        end
-
-        def message
-          "Schema subscription type has changed from `#{old_schema.subscription}` to `#{new_schema.subscription}`"
-        end
-
-        def path
-          # TODO
         end
       end
 
@@ -451,16 +493,16 @@ module GraphQL
         end
 
         def message
-          if old_argument.default_value.nil? || old_argument.default_value == :__no_default__
-            "Default value `#{new_argument.default_value}` was added to argument `#{new_argument.graphql_name}` on field `#{type.graphql_definition}.#{field.graphql_name}`"
-          else
-            "Default value for argument `#{new_argument.graphql_name}` on field `#{type.graphql_definition}.#{field.name}` changed"\
+          if old_argument.default_value?
+            "Default value for argument `#{new_argument.graphql_name}` on field `#{field.path}` changed"\
               " from `#{old_argument.default_value}` to `#{new_argument.default_value}`"
+          else
+            "Default value `#{new_argument.default_value}` was added to argument `#{new_argument.graphql_name}` on field `#{field.path}`"
           end
         end
 
         def path
-          [type.graphql_definition, field.graphql_name, old_argument.graphql_name].join('.')
+          old_argument.path
         end
       end
 
@@ -478,12 +520,12 @@ module GraphQL
         end
 
         def message
-          "Input field `#{input_type.graphql_definition}.#{old_field.graphql_name}` default changed"\
+          "Input field `#{path}` default changed"\
             " from `#{old_field.default_value}` to `#{new_field.default_value}`"
         end
 
         def path
-          [input_type.graphql_definition, old_field.graphql_name].join(".")
+          old_field.path
         end
       end
 
@@ -501,8 +543,12 @@ module GraphQL
         end
 
         def message
-          "Default value for argument `#{new_argument.graphql_name}` on directive `#{directive.graphql_name}` changed"\
-            " from `#{old_argument.ast_node.default_value}` to `#{new_argument.ast_node.default_value}`"
+          if old_argument.default_value?
+            "Default value for argument `#{new_argument.graphql_name}` on directive `#{directive.graphql_name}` changed"\
+              " from `#{old_argument.default_value}` to `#{new_argument.default_value}`"
+          else
+            "Default value `#{new_argument.default_value}` was added to argument `#{new_argument.graphql_name}` on directive `#{directive.graphql_name}`"
+          end
         end
 
         def path
@@ -513,21 +559,27 @@ module GraphQL
       class EnumValueAdded < AbstractChange
         attr_reader :enum_type, :enum_value, :criticality
 
-        def initialize(enum_type, enum_value)
+        def initialize(enum_type, enum_value, usage)
           @enum_type = enum_type
           @enum_value = enum_value
-          @criticality = Changes::Criticality.dangerous(
-            reason: "Adding an enum value may break existing clients that were not " \
-              "programming defensively against an added case when querying an enum."
-          )
+          @criticality = if usage.output?
+                           Changes::Criticality.dangerous(
+                             reason: "Adding an enum value may break existing clients that were not " \
+                              "programmed defensively against an added case when querying an enum."
+                           )
+                         else
+                           Changes::Criticality.non_breaking(
+                             reason: "Adding an enum value for enums used only in inputs is non-breaking."
+                           )
+                         end
         end
 
         def message
-          "Enum value `#{enum_value.graphql_name}` was added to enum `#{enum_type.graphql_definition}`"
+          "Enum value `#{enum_value.graphql_name}` was added to enum `#{enum_type.graphql_name}`"
         end
 
         def path
-          [enum_type.graphql_definition, enum_value.graphql_name].join(".")
+          enum_value.path
         end
       end
 
@@ -544,11 +596,11 @@ module GraphQL
         end
 
         def message
-          "Union member `#{union_member.graphql_name}` was added to Union type `#{union_type.graphql_definition}`"
+          "Union member `#{union_member.graphql_name}` was added to Union type `#{union_type.graphql_name}`"
         end
 
         def path
-          union_type.graphql_definition.to_s
+          union_type.path
         end
       end
 
@@ -565,11 +617,11 @@ module GraphQL
         end
 
         def message
-          "`#{object_type.graphql_definition}` object implements `#{interface.graphql_name}` interface"
+          "`#{object_type.graphql_name}` object implements `#{interface.graphql_name}` interface"
         end
 
         def path
-          object_type.graphql_definition.to_s
+          object_type.path
         end
       end
 
@@ -579,8 +631,8 @@ module GraphQL
         attr_reader :input_object_type, :field, :criticality
 
         def initialize(input_object_type, field)
-          @criticality = if field.type.non_null?
-            Changes::Criticality.breaking(reason: "Adding a non-null field to an existing input type will cause existing queries that use this input type to error because they will not provide a value for this new field.")
+          @criticality = if field.type.non_null? && !field.default_value?
+            Changes::Criticality.breaking(reason: "Adding a non-null input field without a default value to an existing input type will cause existing queries that use this input type to error because they will not provide a value for this new field.")
           else
             Changes::Criticality.non_breaking
           end
@@ -590,11 +642,11 @@ module GraphQL
         end
 
         def message
-          "Input field `#{field.graphql_name}` was added to input object type `#{input_object_type.graphql_definition}`"
+          "Input field `#{field.graphql_name}` was added to input object type `#{input_object_type.graphql_name}`"
         end
 
         def path
-          [input_object_type.graphql_definition, field.graphql_name].join(".")
+          field.path
         end
       end
 
@@ -602,8 +654,8 @@ module GraphQL
         attr_reader :type, :field, :argument, :criticality
 
         def initialize(type, field, argument)
-          @criticality = if argument.type.non_null?
-            Changes::Criticality.breaking(reason: "Adding a required argument to an existing field is a breaking change because it will cause existing uses of this field to error.")
+          @criticality = if argument.type.non_null? && !argument.default_value?
+            Changes::Criticality.breaking(reason: "Adding a required argument without a default value to an existing field is a breaking change because it will cause existing uses of this field to error.")
           else
             Changes::Criticality.non_breaking
           end
@@ -614,11 +666,11 @@ module GraphQL
         end
 
         def message
-          "Argument `#{argument.graphql_name}: #{argument.type.graphql_definition}` added to field `#{type.graphql_definition}.#{field.graphql_name}`"
+          "Argument `#{argument.graphql_name}: #{argument.type.graphql_name}` added to field `#{field.path}`"
         end
 
         def path
-          [type.graphql_definition, field.graphql_name, argument.graphql_name].join(".")
+          argument.path
         end
       end
 
@@ -631,11 +683,11 @@ module GraphQL
         end
 
         def message
-          "Type `#{type.graphql_definition}` was added"
+          "Type `#{type.graphql_name}` was added"
         end
 
         def path
-          type.graphql_definition.to_s
+          type.path
         end
       end
 
@@ -666,11 +718,11 @@ module GraphQL
         end
 
         def message
-          "Description `#{old_type.description}` on type `#{old_type.graphql_definition}` has changed to `#{new_type.description}`"
+          "Description `#{old_type.description}` on type `#{old_type.graphql_name}` has changed to `#{new_type.description}`"
         end
 
         def path
-          old_type.graphql_definition.to_s
+          old_type.path
         end
       end
 
@@ -685,12 +737,12 @@ module GraphQL
         end
 
         def message
-          "Description for enum value `#{enum.graphql_name}.#{new_enum_value.graphql_name}` changed from " \
+          "Description for enum value `#{new_enum_value.path}` changed from " \
             "`#{old_enum_value.description}` to `#{new_enum_value.description}`"
         end
 
         def path
-          [enum.graphql_name, old_enum_value.graphql_name].join(".")
+          old_enum_value.path
         end
       end
 
@@ -706,16 +758,15 @@ module GraphQL
 
         def message
           if old_enum_value.deprecation_reason
-            "Enum value `#{enum.graphql_name}.#{new_enum_value.graphql_name}` deprecation reason changed " \
+            "Enum value `#{new_enum_value.path}` deprecation reason changed " \
               "from `#{old_enum_value.deprecation_reason}` to `#{new_enum_value.deprecation_reason}`"
           else
-            "Enum value `#{enum.graphql_name}.#{new_enum_value.graphql_name}` was deprecated with reason" \
-              " `#{new_enum_value.deprecation_reason}`"
+            "Enum value `#{new_enum_value.path}` was deprecated with reason `#{new_enum_value.deprecation_reason}`"
           end
         end
 
         def path
-          [enum.graphql_name, old_enum_value.graphql_name].join(".")
+          old_enum_value.path
         end
       end
 
@@ -730,12 +781,12 @@ module GraphQL
         end
 
         def message
-          "Input field `#{input_type.graphql_definition}.#{old_field.graphql_name}` description changed"\
+          "Input field `#{old_field.path}` description changed"\
             " from `#{old_field.description}` to `#{new_field.description}`"
         end
 
         def path
-          [input_type.graphql_definition, old_field.graphql_name].join(".")
+          old_field.path
         end
       end
 
@@ -769,12 +820,12 @@ module GraphQL
         end
 
         def message
-          "Field `#{type.graphql_definition}.#{old_field.graphql_name}` description changed"\
+          "Field `#{old_field.path}` description changed"\
             " from `#{old_field.description}` to `#{new_field.description}`"
         end
 
         def path
-          [type.graphql_definition, old_field.graphql_name].join(".")
+          old_field.path
         end
       end
 
@@ -790,12 +841,12 @@ module GraphQL
         end
 
         def message
-          "Description for argument `#{new_argument.graphql_name}` on field `#{type.graphql_definition}.#{field.graphql_name}` changed"\
+          "Description for argument `#{new_argument.graphql_name}` on field `#{field.path}` changed"\
             " from `#{old_argument.description}` to `#{new_argument.description}`"
         end
 
         def path
-          [type.graphql_definition, field.graphql_name, old_argument.graphql_name].join(".")
+          old_argument.path
         end
       end
 
@@ -830,12 +881,12 @@ module GraphQL
         end
 
         def message
-          "Deprecation reason on field `#{type.graphql_definition}.#{new_field.graphql_name}` has changed "\
+          "Deprecation reason on field `#{new_field.path}` has changed "\
             "from `#{old_field.deprecation_reason}` to `#{new_field.deprecation_reason}`"
         end
 
         def path
-          [type.graphql_definition, old_field.graphql_name].join(".")
+          old_field.path
         end
       end
 
@@ -849,11 +900,11 @@ module GraphQL
         end
 
         def message
-          "Field `#{field.graphql_name}` was added to object type `#{object_type.graphql_definition}`"
+          "Field `#{field.graphql_name}` was added to object type `#{object_type.graphql_name}`"
         end
 
         def path
-          [object_type.graphql_definition, field.graphql_name].join(".")
+          [object_type.graphql_name, field.graphql_name].join(".")
         end
       end
 
@@ -1034,6 +1085,10 @@ module GraphQL
 
         def message
           "Argument `#{argument.graphql_name}` was added to directive `#{directive.graphql_name}`"
+        end
+
+        def path
+          ["@#{directive.graphql_name}", argument.graphql_name].join('.')
         end
       end
     end

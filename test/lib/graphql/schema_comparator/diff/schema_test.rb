@@ -5,6 +5,7 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
     @old_schema = <<~SCHEMA
       schema {
         query: Query
+        mutation: OldMutation
       }
       input AInput {
         # a
@@ -67,6 +68,9 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
       type WillBeRemoved {
         a: String
       }
+      type OldMutation {
+        a: String!
+      }
 
       directive @willBeRemoved on FIELD
     SCHEMA
@@ -74,6 +78,7 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
     @new_schema =<<~SCHEMA
       schema {
         query: Query
+        mutation: Mutation
       }
       input AInput {
         # changed
@@ -139,6 +144,10 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
         # Included when true.
         someArg: String!
       ) on FIELD
+
+      type Mutation {
+        a: String!
+      }
     SCHEMA
 
     @differ = GraphQL::SchemaComparator::Diff::Schema.new(
@@ -168,6 +177,7 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
       "Deprecation reason on field `CType.a` has changed from `whynot` to `cuz`",
       "Argument `arg: Int` added to field `CType.a`",
       "Default value `10` was added to argument `arg` on field `CType.d`",
+      "Default value `Test` was added to argument `anotherArg` on directive `yolo`",
       "Union member `BType` was removed from Union type `MyUnion`",
       "Union member `DType` was added to Union type `MyUnion`",
       "Field `anotherInterfaceField` was removed from object type `AnotherInterface`",
@@ -191,7 +201,9 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
       "Argument `willBeRemoved` was removed from directive `yolo`",
       "Description for argument `someArg` on directive `yolo` changed from `Included when true.` to `someArg does stuff`",
       "Type for argument `someArg` on directive `yolo` changed from `Boolean!` to `String!`",
-      "Default value for argument `anotherArg` on directive `yolo` changed from `` to `Test`",
+      "Type `Mutation` was added",
+      "Type `OldMutation` was removed",
+      "Schema mutation root has changed from `OldMutation` to `Mutation`",
     ].sort, @differ.diff.map(&:message).sort
 
     assert_equal [
@@ -214,8 +226,11 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
       "CType.a.arg",
       "CType.d.arg",
       "CType.interfaceField",
+      "Mutation",
       "MyUnion",
       "MyUnion",
+      "OldMutation",
+      "OldMutation",
       "AnotherInterface.anotherInterfaceField",
       "AnotherInterface.b",
       "WithInterfaces",
@@ -239,5 +254,166 @@ class GraphQL::SchemaComparator::Diff::SchemaTest < Minitest::Test
       "@yolo.someArg",
       "@yolo.anotherArg",
     ].sort, @differ.diff.map(&:path).sort
+  end
+
+  def test_schema_root_changes
+    old_schema = <<~SCHEMA
+      schema {
+        query: OldQuery
+        mutation: Mutation
+      }
+
+      type OldQuery {
+        a: String!
+      }
+
+      type Mutation {
+        a: String!
+      }
+    SCHEMA
+
+    new_schema = <<~SCHEMA
+      schema {
+        query: Query
+        subscription: Subscription
+      }
+
+      type Query {
+        a: String!
+      }
+
+      type Subscription {
+        a: String!
+      }
+    SCHEMA
+
+    expected_changes = [
+      { path: "Mutation", message: "Schema mutation root `Mutation` was removed", level: 3 },
+      { path: "Mutation", message: "Type `Mutation` was removed", level: 3 },
+      { path: "OldQuery", message: "Schema query root has changed from `OldQuery` to `Query`", level: 3 },
+      { path: "OldQuery", message: "Type `OldQuery` was removed", level: 3 },
+      { path: "Query", message: "Type `Query` was added", level: 1 },
+      { path: "Subscription", message: "Schema subscription root `Subscription` was added", level: 1 },
+      { path: "Subscription", message: "Type `Subscription` was added", level: 1 },
+    ]
+
+    actual_changes = schema_diff(old_schema, new_schema)
+    assert_equal(normalize_schema_diff(expected_changes), normalize_schema_diff(actual_changes))
+  end
+
+  def test_enum_value_changes
+    old_schema = <<~SCHEMA
+      schema {
+        query: Query
+      }
+      
+      type Query {
+        a(arg: AInput): OutputEnum
+        b(arg: InputEnum): String
+      }
+
+      input AInput {
+        options: [Input2Enum]
+      }
+     
+      enum InputEnum {
+        INPUT_A
+        INPUT_B
+      }
+
+      enum Input2Enum {
+        INPUT2_A
+        INPUT2_B
+      }
+
+      enum OutputEnum {
+        OUTPUT_A
+        OUTPUT_B
+      }
+    SCHEMA
+
+    new_schema = <<~SCHEMA
+      schema {
+        query: Query
+      }
+      
+      type Query {
+        a(arg: AInput): OutputEnum
+        b(arg: InputEnum): String
+      }
+
+      input AInput {
+        options: [Input2Enum]
+      }
+     
+      enum InputEnum {
+        INPUT_B
+        INPUT_C
+      }
+
+      enum Input2Enum {
+        INPUT2_B
+        INPUT2_C
+      }
+
+      enum OutputEnum {
+        OUTPUT_B
+        OUTPUT_C
+      }
+    SCHEMA
+
+    expected_changes = [
+      {
+        path: "InputEnum.INPUT_A",
+        message: "Enum value `INPUT_A` was removed from enum `InputEnum`",
+        level: GraphQL::SchemaComparator::Changes::Criticality::BREAKING
+      },
+      {
+        path: "InputEnum.INPUT_C",
+        message: "Enum value `INPUT_C` was added to enum `InputEnum`",
+        level: GraphQL::SchemaComparator::Changes::Criticality::NON_BREAKING
+      },
+      {
+        path: "Input2Enum.INPUT2_A",
+        message: "Enum value `INPUT2_A` was removed from enum `Input2Enum`",
+        level: GraphQL::SchemaComparator::Changes::Criticality::BREAKING
+      },
+      {
+        path: "Input2Enum.INPUT2_C",
+        message: "Enum value `INPUT2_C` was added to enum `Input2Enum`",
+        level: GraphQL::SchemaComparator::Changes::Criticality::NON_BREAKING
+      },
+      {
+        path: "OutputEnum.OUTPUT_A",
+        message: "Enum value `OUTPUT_A` was removed from enum `OutputEnum`",
+        level: GraphQL::SchemaComparator::Changes::Criticality::NON_BREAKING
+      },
+      {
+        path: "OutputEnum.OUTPUT_C",
+        message: "Enum value `OUTPUT_C` was added to enum `OutputEnum`",
+        level: GraphQL::SchemaComparator::Changes::Criticality::DANGEROUS
+      }
+    ]
+
+    actual_changes = schema_diff(old_schema, new_schema)
+    assert_equal(normalize_schema_diff(expected_changes), normalize_schema_diff(actual_changes))
+  end
+
+  def schema_diff(old_schema, new_schema)
+    differ = GraphQL::SchemaComparator::Diff::Schema.new(
+      GraphQL::Schema.from_definition(old_schema),
+      GraphQL::Schema.from_definition(new_schema)
+    )
+    differ.diff.map do |change|
+      {
+        path: change.path,
+        message: change.message,
+        level: change.criticality.level
+      }
+    end
+  end
+
+  def normalize_schema_diff(changes)
+    changes.sort_by { |changes| [changes[:path], changes[:message], changes[:level]] }
   end
 end

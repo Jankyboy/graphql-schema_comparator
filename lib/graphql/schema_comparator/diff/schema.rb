@@ -40,16 +40,16 @@ module GraphQL
           if old_type.kind != new_type.kind
             changes << Changes::TypeKindChanged.new(old_type, new_type)
           else
-            case old_type.graphql_definition
-            when GraphQL::EnumType
-              changes += Diff::Enum.new(old_type, new_type).diff
-            when GraphQL::UnionType
+            case old_type.kind.name
+            when "ENUM"
+              changes += Diff::Enum.new(old_type, new_type, enum_usage(new_type)).diff
+            when "UNION"
               changes += Diff::Union.new(old_type, new_type).diff
-            when GraphQL::InputObjectType
+            when "INPUT_OBJECT"
               changes += Diff::InputObject.new(old_type, new_type).diff
-            when GraphQL::ObjectType
+            when "OBJECT"
               changes += Diff::ObjectType.new(old_type, new_type).diff
-            when GraphQL::InterfaceType
+            when "INTERFACE"
               changes += Diff::Interface.new(old_type, new_type).diff
             end
           end
@@ -64,16 +64,34 @@ module GraphQL
         def changes_in_schema
           changes = []
 
-          if old_schema.query&.to_graphql != new_schema.query&.to_graphql
-            changes << Changes::SchemaQueryTypeChanged.new(old_schema, new_schema)
+          if old_schema.query&.graphql_name != new_schema.query&.graphql_name
+            if old_schema.query.nil?
+              changes << Changes::RootOperationTypeAdded.new(new_schema: new_schema, operation_type: :query)
+            elsif new_schema.query.nil?
+              changes << Changes::RootOperationTypeRemoved.new(old_schema: old_schema, operation_type: :query)
+            else
+              changes << Changes::RootOperationTypeChanged.new(old_schema: old_schema, new_schema: new_schema, operation_type: :query)
+            end
           end
 
-          if old_schema.mutation&.to_graphql != new_schema.mutation&.to_graphql
-            changes << Changes::SchemaMutationTypeChanged.new(old_schema, new_schema)
+          if old_schema.mutation&.graphql_name != new_schema.mutation&.graphql_name
+            if old_schema.mutation.nil?
+              changes << Changes::RootOperationTypeAdded.new(new_schema: new_schema, operation_type: :mutation)
+            elsif new_schema.mutation.nil?
+              changes << Changes::RootOperationTypeRemoved.new(old_schema: old_schema, operation_type: :mutation)
+            else
+              changes << Changes::RootOperationTypeChanged.new(old_schema: old_schema, new_schema: new_schema, operation_type: :mutation)
+            end
           end
 
-          if old_schema.subscription&.to_graphql != new_schema.subscription&.to_graphql
-            changes << Changes::SchemaSubscriptionTypeChanged.new(old_schema, new_schema)
+          if old_schema.subscription&.graphql_name != new_schema.subscription&.graphql_name
+            if old_schema.subscription.nil?
+              changes << Changes::RootOperationTypeAdded.new(new_schema: new_schema, operation_type: :subscription)
+            elsif new_schema.subscription.nil?
+              changes << Changes::RootOperationTypeRemoved.new(old_schema: old_schema, operation_type: :subscription)
+            else
+              changes << Changes::RootOperationTypeChanged.new(old_schema: old_schema, new_schema: new_schema, operation_type: :subscription)
+            end
           end
 
           changes
@@ -93,6 +111,12 @@ module GraphQL
         end
 
         private
+
+        def enum_usage(new_enum)
+          input_usage = new_schema.references_to(new_enum).any? { |member| member.is_a?(GraphQL::Schema::Argument) }
+          output_usage = new_schema.references_to(new_enum).any? { |member| member.is_a?(GraphQL::Schema::Field) }
+          EnumUsage.new(input: input_usage, output: output_usage)
+        end
 
         def each_common_type(&block)
           intersection = old_types.keys & new_types.keys
